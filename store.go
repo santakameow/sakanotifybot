@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,10 +15,18 @@ type task struct {
 	Text string `json:"text"`
 }
 
+type feedSubscription struct {
+	ID   int               `json:"id"`
+	URL  string            `json:"url"`
+	Seen map[string]string `json:"seen"` // nil until the first successful poll
+}
+
 type chatState struct {
-	Subscribed bool   `json:"subscribed"`
-	NextID     int    `json:"next_id"`
-	Tasks      []task `json:"tasks"`
+	Subscribed bool               `json:"subscribed"`
+	NextID     int                `json:"next_id"`
+	Tasks      []task             `json:"tasks"`
+	NextFeedID int                `json:"next_feed_id,omitempty"`
+	Feeds      []feedSubscription `json:"feeds,omitempty"`
 }
 
 type store struct {
@@ -68,6 +77,10 @@ func (s *store) change(id int64, fn func(*chatState) bool) (bool, error) {
 
 func copyChat(chat chatState) chatState {
 	chat.Tasks = append([]task(nil), chat.Tasks...)
+	chat.Feeds = append([]feedSubscription(nil), chat.Feeds...)
+	for i := range chat.Feeds {
+		chat.Feeds[i].Seen = maps.Clone(chat.Feeds[i].Seen)
+	}
 	return chat
 }
 
@@ -87,6 +100,30 @@ func (s *store) subscriptions() map[int64]chatState {
 		}
 	}
 	return active
+}
+
+func (s *store) feedSubscriptions() map[string][]feedSubscriber {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	feeds := make(map[string][]feedSubscriber)
+	for id, chat := range s.chats {
+		for _, sub := range chat.Feeds {
+			// Seen snapshots are replaced, never mutated after publication.
+			feeds[sub.URL] = append(feeds[sub.URL], feedSubscriber{id, sub})
+		}
+	}
+	return feeds
+}
+
+func (s *store) hasFeed(id int64, feedID int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sub := range s.chats[id].Feeds {
+		if sub.ID == feedID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *store) save() error {

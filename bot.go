@@ -18,7 +18,10 @@ const (
 		"/add текст — добавить задачу\n" +
 		"/list — показать активные задачи\n" +
 		"/done номер — закрыть задачу\n" +
-		"/stop — выключить напоминания (задачи сохранятся)"
+		"/stop — выключить напоминания (задачи сохранятся)\n" +
+		"/subscribe URL — подписаться на RSS или Atom\n" +
+		"/feeds — показать подписки на ленты\n" +
+		"/unsubscribe номер — отписаться от ленты"
 )
 
 func formatTasks(tasks []task) string {
@@ -49,6 +52,8 @@ func command(s *store, id int64, username, input string) string {
 		return help
 	case "/list":
 		return formatTasks(s.chat(id).Tasks)
+	case "/subscribe", "/feeds", "/unsubscribe":
+		return feedCommand(s, id, name, arg)
 	case "/start", "/stop":
 		enable := name == "/start"
 		_, err := s.change(id, func(chat *chatState) bool {

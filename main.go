@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -102,7 +103,7 @@ func run(ctx context.Context) error {
 		redact := strings.NewReplacer(token, "[TOKEN]", secret, "[SECRET]")
 		return fmt.Errorf("Telegram SetWebhook: %s", redact.Replace(err.Error()))
 	}
-	send := func(ctx context.Context, id int64, text string) {
+	send := func(ctx context.Context, id int64, text string) error {
 		sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		_, err := bot.SendMessage(sendCtx, &telego.SendMessageParams{
@@ -111,16 +112,19 @@ func run(ctx context.Context) error {
 		if err != nil && ctx.Err() == nil {
 			log.Printf("Telegram SendMessage: %s", strings.ReplaceAll(err.Error(), token, "[TOKEN]"))
 		}
+		return err
 	}
-	reminderCtx, cancelReminders := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runReminders(reminderCtx, s, send)
-	}()
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		runReminders(workerCtx, s, func(ctx context.Context, id int64, text string) {
+			_ = send(ctx, id, text)
+		})
+	})
+	workers.Go(func() { runFeeds(workerCtx, s, send) })
 	defer func() {
-		cancelReminders()
-		<-done
+		cancelWorkers()
+		workers.Wait()
 	}()
 
 	log.Printf("Бот @%s запущен, вебхук слушает %s", me.Username, listener.Addr())
